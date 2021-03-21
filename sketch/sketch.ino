@@ -9,7 +9,9 @@
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
 #define SPI_SPEED SD_SCK_MHZ(4)
+#define SD_CHIPSELECT 10
 //#define DEBUG
+//#define SIMULATE
 
 LiquidCrystalFast lcd(2, 4, 3, 17, 16, 15, 14);
          // LCD pins: RS RW EN D4  D5  D6  D7
@@ -19,10 +21,7 @@ TinyGPS gps;
 L3G gyro;
 LSM303 compass;
 
-const int sdCardchipSelectPin = 10;
 SdFs sd;
-
-FsFile trackDefinitionsFile;
 FsFile laptimesFile;
 FsFile dataloggingFile;
 
@@ -50,7 +49,8 @@ static void print_date(TinyGPS &gps);
 static void print_str(const char *str, int len);
 #endif
 
-String timeToString(unsigned long t);
+void timeToString(char* buffer, unsigned long t);
+char timeBuffer[16];
 char get_line_intersection(float p0_x, float p0_y, float p1_x, float p1_y, 
     float p2_x, float p2_y, float p3_x, float p3_y, float *i_x, float *i_y);
 bool doLinesIntersect(Line& a, Line& b);
@@ -58,7 +58,7 @@ bool doLinesIntersect(Line& a, Line& b);
 Line startFinishLine = Line(Coordinate(48.06895, 11.56704), Coordinate(48.06842, 11.56613));
 
 unsigned long laptimes[128];
-unsigned char bestLapIndex = 0;
+unsigned char bestLapIndex = 1;
 unsigned char currentLapIndex = 0;
 unsigned long currentLapStartTimestamp = 0;
 unsigned char cyclicalLapIndex = 1;
@@ -72,7 +72,7 @@ unsigned long age;
 void setup() {
   for(int i = 0; i < 128; i++) laptimes[i] = 0;
 
-  #ifdef DEBUG
+  #if defined(DEBUG) || defined(SIMULATE)
   Serial.begin(115200);
   #endif
   
@@ -84,59 +84,82 @@ void setup() {
   lcd.print("~   laptimer   ~");
 
   gpsPort.begin(57600);
-  smartdelay(1000);
+  smartdelay(2000);
 
-  unsigned char i = 0;
-  do {
-    gps.f_get_position(&lat, &lon, &age);
-    smartdelay(250);
-    lcd.setCursor(0, 1);
-    if(i % 4 == 0)      lcd.print("wait for gps    ");
-    else if(i % 4== 1)  lcd.print("wait for gps .  ");
-    else if(i % 4 == 2) lcd.print("wait for gps .. ");
-    else if(i % 4 == 3) lcd.print("wait for gps ...");
-    i++;
-  } while(age >= TinyGPS::GPS_INVALID_AGE); //wait until we have a gps fix
-  
-  lcd.setCursor(0, 1);
-  lcd.print("opening sd card ");
-  smartdelay(100);
+  #ifndef SIMULATE
+    unsigned char i = 0;
+    do {
+      gps.f_get_position(&lat, &lon, &age);
+      smartdelay(500);
+      lcd.setCursor(0, 1);
+      if(i % 4 == 0)      lcd.print("wait for gps    ");
+      else if(i % 4== 1)  lcd.print("wait for gps .  ");
+      else if(i % 4 == 2) lcd.print("wait for gps .. ");
+      else if(i % 4 == 3) lcd.print("wait for gps ...");
+      i++;
+    } while(age >= TinyGPS::GPS_INVALID_AGE); //wait until we have a gps fix
 
-  if (!sd.begin(sdCardchipSelectPin, SPI_SPEED)) {
-    lcd.clear();
-    lcd.print("error with");
     lcd.setCursor(0, 1);
-    lcd.print("sd card");
-    while(true) {}
-  }
+    lcd.print("opening sd card ");
+    smartdelay(100);
+
+    if (!sd.begin(SD_CHIPSELECT, SPI_SPEED)) {
+      lcd.clear();
+      lcd.print("error with");
+      lcd.setCursor(0, 1);
+      lcd.print("sd card");
+      while(true) {}
+    }
+  #else 
+    lcd.setCursor(0, 1);
+    lcd.print("opening sd card ");
+    smartdelay(100);
+
+    if (!sd.begin(SD_CHIPSELECT, SPI_SPEED)) {
+      lcd.clear();
+      lcd.print("error with");
+      lcd.setCursor(0, 1);
+      lcd.print("sd card");
+      while(true) {}
+    }
+    FsFile simulationFile = sd.open("simulation.txt", FILE_READ);
+    if (simulationFile) {
+      String line = simulationFile.readStringUntil('\n');
+      String slat = line.substring(0, line.indexOf(','));
+      line = line.substring(line.indexOf(','));
+      String slon = line.substring(1);
+      lat = slat.toFloat();
+      lon = slon.toFloat();
+      simulationFile.close();
+    } else {
+      Serial.println("simul.txt error");
+    }
+  #endif
+
 
   lcd.setCursor(0, 1);
   lcd.print("open tracks.txt ");
 
-  trackDefinitionsFile = sd.open("tracks.txt", FILE_READ);
+  FsFile trackDefinitionsFile = sd.open("tracks.txt", FILE_READ);
   if (trackDefinitionsFile) {
-    double minDist = -1;
+    float minDist = -1;
     String minTrack = "none";
     // TODO this should probably reside in a separate method
     while(trackDefinitionsFile.available()) {
       String line = trackDefinitionsFile.readStringUntil('\n');
       String trackname = line.substring(0, line.indexOf(','));
-      line = line.substring(line.indexOf(','));
-      String slat1 = line.substring(0, line.indexOf(','));
-      line = line.substring(line.indexOf(','));
-      String slon1 = line.substring(0, line.indexOf(','));
-      line = line.substring(line.indexOf(','));
-      String slat2 = line.substring(0, line.indexOf(','));
-      line = line.substring(line.indexOf(','));
-      String slon2 = line.substring(0, line.indexOf(','));
+      line = line.substring(line.indexOf(',') + 1);
+      float lat1 = line.substring(0, line.indexOf(',')).toFloat();
+      line = line.substring(line.indexOf(',') + 1);
+      float lon1 = line.substring(0, line.indexOf(',')).toFloat();
+      line = line.substring(line.indexOf(',') + 1);
+      float lat2 = line.substring(0, line.indexOf(',')).toFloat();
+      line = line.substring(line.indexOf(',') + 1);
+      float lon2 = line.substring(0, line.indexOf(',')).toFloat();
 
       smartdelay(10);
 
-      float lat1 = slat1.toFloat();
-      float lon1 = slon1.toFloat();
-      float lat2 = slat2.toFloat();
-      float lon2 = slon2.toFloat();
-      double dist = TinyGPS::distance_between(lat, lon, lat1, lon1);
+      float dist = TinyGPS::distance_between(lat, lon, lat1, lon1);
       if(minDist == -1 || dist < minDist) {
         minDist = dist;
         minTrack = trackname;
@@ -151,7 +174,7 @@ void setup() {
     lcd.print("                ");
     lcd.setCursor(0, 1);
     lcd.print(minTrack.substring(0, 16));
-    smartdelay(2500);
+    smartdelay(1000);
   } else {
     lcd.setCursor(0, 0);
     lcd.print("error opening:  ");
@@ -191,7 +214,6 @@ void setup() {
   }
   gyro.enableDefault();
 
-  compass.init();
   if (!compass.init())
   {
     lcd.setCursor(0, 0);
@@ -207,76 +229,101 @@ void loop() {
   lcd.setCursor(0, 0);
   prevlat = lat;
   prevlon = lon;
-  gps.f_get_position(&lat, &lon, &age);
-  #ifdef DEBUG
-  printGPSDebugInfo();
+  #ifndef SIMULATE
+    gps.f_get_position(&lat, &lon, &age);
+  #else
+    static unsigned int skipper = 0;
+    FsFile simulationFile = sd.open("simulation.txt", FILE_READ);
+    if(skipper >= simulationFile.size() - 1000) skipper = 0;
+    simulationFile.seek(skipper);
+    String line = simulationFile.readStringUntil('\n');
+    skipper = simulationFile.position();
+    String slat = line.substring(0, line.indexOf(','));
+    String slon = line.substring(line.indexOf(',') + 1);
+    lat = slat.toFloat();
+    lon = slon.toFloat();
+    Serial.print(lat, 6);
+    Serial.print(",");
+    Serial.println(lon, 6);
+    Serial.println();
+    simulationFile.close();
+    smartdelay(random(1, 5));
   #endif
-  smartdelay(50);
+
+  #ifdef DEBUG
+    printGPSDebugInfo();
+  #endif
+
+  #ifndef SIMULATE
+    smartdelay(50);
+  #endif
 
   Line currentMove = Line(Coordinate(prevlat, prevlon), Coordinate(lat, lon));
   if(doLinesIntersect(currentMove, startFinishLine)) {
     laptimes[currentLapIndex] = millis() - currentLapStartTimestamp;
     currentLapStartTimestamp = millis();
 
-    String line;
-    line += "Lap#";
-    line += currentLapIndex;
-    line += " ";
-    line += timeToString(laptimes[currentLapIndex]);
+    if(currentLapIndex != 0) {
+      char buffer[32];
+      timeToString(timeBuffer, laptimes[currentLapIndex]);
+      sprintf(buffer, "Lap# %d %s", currentLapIndex, timeBuffer);
 
-    laptimesFile = sd.open("laptimes.txt", FILE_WRITE);
-    laptimesFile.println(line);
-    laptimesFile.close();
+      laptimesFile = sd.open("laptimes.txt", FILE_WRITE);
+      laptimesFile.println(buffer);
+      laptimesFile.close();
 
-    if(laptimes[currentLapIndex] < laptimes[bestLapIndex]) bestLapIndex = currentLapIndex;
+      if(laptimes[currentLapIndex] < laptimes[bestLapIndex]) bestLapIndex = currentLapIndex;
+    }
     currentLapIndex++;
   }
   
   if(age > 500)  lcd.print("!");
   else           lcd.print(" ");
 
+  char speedBuffer [4];
+  sprintf(speedBuffer, "%3d", (int)gps.f_speed_kmph());
+
   if(currentLapIndex == 0) { //not driven through start/finish line yet
     static unsigned char cycle = 0;
-    if(cycle++ < 10) {
-      lcd.print( "/    B# -:--.-");
-      lcd.setCursor(0, 1);
-      lcd.print( "      C# -:--.-");    
+    lcd.print(speedBuffer);
+    lcd.print("            ");  
+    lcd.setCursor(0, 1);
+    if(cycle++ < 16) { 
+      lcd.print("                ");  
     } else {
-      lcd.print( "-    B# -:--.-");
-      lcd.setCursor(0, 1);
-      lcd.print( "      C# -:--.-");    
+      lcd.print("               ~");
     }
-    if(cycle > 20) cycle = 0;
+    if(cycle > 32) cycle = 0;
   } else { 
-    float current_speed = gps.f_speed_kmph();
-    if(current_speed < 5) {
+    lcd.print(speedBuffer);
+    lcd.print(bestLapIndex < 10 ? "   B" : "  B");
+    lcd.print(bestLapIndex); lcd.print(" ");
+    timeToString(timeBuffer, laptimes[bestLapIndex]);
+    lcd.print(timeBuffer);
+    lcd.setCursor(0, 1);
+
+    if(gps.f_speed_kmph() < 4) {
       static unsigned long cycleTimer = millis();
-      if(cycleTimer + 1000 < millis()) {
+      if(cycleTimer + 2500 < millis()) {
         cycleTimer = millis();
         cyclicalLapIndex++;
-        if(cyclicalLapIndex > currentLapIndex) cyclicalLapIndex = 0;
+        if(cyclicalLapIndex >= currentLapIndex) cyclicalLapIndex = 1;
       }
       //display best lap and all lap times cyclical 
-      lcd.print(bestLapIndex < 10 ? "      B" : "     B");
-      lcd.print(bestLapIndex); lcd.print(" ");
-      lcd.print(timeToString(laptimes[bestLapIndex]));
-      lcd.setCursor(0, 1);
-      lcd.print(cyclicalLapIndex < 10 ? "      L" : "     L");
+      lcd.print(cyclicalLapIndex < 10 ? "       L" : "      L");
       lcd.print(cyclicalLapIndex); lcd.print(" ");
-      lcd.print(timeToString(laptimes[cyclicalLapIndex])); 
+      timeToString(timeBuffer, laptimes[cyclicalLapIndex]);
+      lcd.print(timeBuffer); 
     } else {
       //display best lap- and current lap-time
-      lcd.print(bestLapIndex < 10 ? "      B" : "     B");
-      lcd.print(bestLapIndex); lcd.print(" ");
-      lcd.print(timeToString(laptimes[bestLapIndex]));
-      lcd.setCursor(0, 1);
-      lcd.print(currentLapIndex < 10 ? "      C" : "     C");
+      lcd.print(currentLapIndex < 10 ? "       C" : "      C");
       lcd.print(currentLapIndex); lcd.print(" ");
-      lcd.print(timeToString(millis() - currentLapStartTimestamp)); 
+      timeToString(timeBuffer, millis() - currentLapStartTimestamp);
+      lcd.print(timeBuffer); 
     }
   }
-
-  if(lastDataLogTimestamp + 200 < millis()) {
+#ifndef SIMULATE
+  if(lastDataLogTimestamp + 250 < millis()) {
     lastDataLogTimestamp = millis();
     int year;
     unsigned char month, day, hour, minute, second, hundredths;
@@ -288,10 +335,11 @@ void loop() {
 
     dataloggingLine += millis();          dataloggingLine += ";";
     dataloggingLine += age;               dataloggingLine += ";";
-    dataloggingLine += String(year) + "-" + String(month) + "-" + String(day) + " " +
-            String(hour) + ":" + String(minute) + ":" + String(second) + "." + String(hundredths) + ",";
+    dataloggingLine += String(year) + "-" + String(month, 2) + "-" + String(day, 2) + " " +
+            String(hour, 2) + ":" + String(minute, 2) + ":" + String(second, 2) + "." + String(hundredths) + ",";
     dataloggingLine += String(lat, 6);    dataloggingLine += ",";
     dataloggingLine += String(lon, 6);    dataloggingLine += ";";
+    dataloggingLine += String((int)gps.f_speed_kmph(), 3); dataloggingLine += ";";
     dataloggingLine += (int)gyro.g.x;     dataloggingLine += ",";
     dataloggingLine += (int)gyro.g.y;     dataloggingLine += ",";
     dataloggingLine += (int)gyro.g.z;     dataloggingLine += ",";
@@ -304,7 +352,7 @@ void loop() {
     dataloggingLine += "\n";
 
     static unsigned char ctr = 0;
-    if(ctr++ > 5) {
+    if(ctr++ > 4) {
       ctr = 0;
       dataloggingFile = sd.open("datalogging.txt", FILE_WRITE);;
       dataloggingFile.print(dataloggingLine);
@@ -318,6 +366,7 @@ void loop() {
     }
   }
   smartdelay(50);
+#endif
 }
 
 static void smartdelay(unsigned long ms)
@@ -425,18 +474,19 @@ static void print_str(const char *str, int len)
 }
 #endif
 
-String timeToString(unsigned long t) {
-  long ms = t % 1000 / 100;
-  long s = (t / 1000) % 60;
-  long m = (t / (1000 * 60)) % 24;
-  String ret = "";
+void timeToString(char* buffer, unsigned long t) {
+  short ms = t % 1000 / 100;
+  short s = (t / 1000) % 60;
+  short m = (t / (1000 * 60)) % 24;
+  sprintf(buffer, "%d:%02d.%d", m, s, ms);
+  /*String ret = "";
   ret += m;
   ret += ":";
   if(s < 10) ret += "0";
   ret += s;
   ret += ".";
   ret += ms;
-  return ret;
+  return ret;*/
 }
 
 bool LineIntersection(

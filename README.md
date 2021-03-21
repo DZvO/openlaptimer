@@ -13,6 +13,11 @@ Includes datalogging to SD-Card so you can analyze what happened using a softwar
 - Logs laptimes to SD card (laptimes.txt)
 - Logs current GPS coordinates and IMU data to SD card (datalogging.txt)
 
+### Planned
+- Instead of just checking that we crossed the start/finish line instead check when exactly we crossed it (-> more accuracy)
+- Reduce usage of Arduino "String" class - instead use sprintf/char[] instead (prevent memory fragmentation, reduce memory/cpu usage)
+
+
 ### Libraries
 TODO Add these libraries as git submodules  
 - https://github.com/greiman/SdFat
